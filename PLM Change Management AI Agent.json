@@ -1,0 +1,286 @@
+{
+  "name": "PLM Change Management AI Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -912,
+        -48
+      ],
+      "id": "55b4a2f6-b975-4e1e-8e8b-0622a6387d54",
+      "name": "Start"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    part_number:        \"PRT-101\",\n    change_type:        \"dimension_change\",\n    old_value:          \"4.20\",\n    new_value:          \"4.65\",\n    change_description: \"Copper winding wire gauge increased from 18AWG to 16AWG due to thermal performance findings from supplier audit Q4-2024\",\n    requestor:          \"R.Sharma / Engineering\",\n    timestamp:          new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        -48
+      ],
+      "id": "c05a0426-0648-434b-99bd-260be83a0c81",
+      "name": "Change Request Data"
+    },
+    {
+      "parameters": {
+        "url": "https://docs.google.com/spreadsheets/d/11hb2dizySefUba2KNd-Q3IgTJa1ZlSuFWRDcmB-Phv8/export?format=csv&sheet=BOM_Master",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -496,
+        -48
+      ],
+      "id": "14638f36-6e23-45a6-8b83-99b1311eb91f",
+      "name": "Fetch BOM"
+    },
+    {
+      "parameters": {
+        "url": "https://docs.google.com/spreadsheets/d/11hb2dizySefUba2KNd-Q3IgTJa1ZlSuFWRDcmB-Phv8/export?format=csv&gid=1511452294",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -288,
+        -48
+      ],
+      "id": "fcca7d0a-dc30-4e51-98ec-84b0882d0d7c",
+      "name": "Fetch Work Orders"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a PLM BOM analyst. Always respond with valid JSON only. No explanation, no markdown, no code fences. Just raw JSON."
+            },
+            {
+              "content": "=Changed part: {{ $('Change Request Data').item.json.part_number }}\nChange: {{ $('Change Request Data').item.json.change_description }}\nBOM Data: {{ $('Fetch BOM').item.json.data }}\n\nFind ALL parent assemblies affected. Respond with this JSON only:\n{\"affected_assemblies\":[{\"assembly_id\":\"\",\"description\":\"\",\"level\":0}],\"total_affected_count\":0,\"shared_part_flag\":true,\"impact_summary\":\"\"}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        -80,
+        -48
+      ],
+      "id": "98fdc93f-81c7-447b-a213-4ea2bf30324e",
+      "name": "BOM Traversal Agent",
+      "credentials": {
+        "openAiApi": {
+          "id": "ClsSPcufCWpJ2xbi",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a senior PLM Change Manager. Respond with valid JSON only. No markdown, no explanation, no code fences."
+            },
+            {
+              "content": "=Classify this engineering change:\n\nPart: {{ $('Change Request Data').item.json.part_number }}\nChange: {{ $('Change Request Data').item.json.change_description }}\nOld value: {{ $('Change Request Data').item.json.old_value }}\nNew value: {{ $('Change Request Data').item.json.new_value }}\nAffected assemblies: {{ $('BOM Traversal Agent').item.json.message.content }}\n\nRespond with this JSON only:\n{\"severity\":\"Critical\",\"change_category\":\"Design\",\"regulatory_flag\":false,\"eco_priority\":\"P1\",\"validation_required\":\"\",\"risk_summary\":\"\"}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        272,
+        -48
+      ],
+      "id": "c09b9c1f-e70a-4c08-9d63-0f7f51590097",
+      "name": "Impact Classifier",
+      "credentials": {
+        "openAiApi": {
+          "id": "ClsSPcufCWpJ2xbi",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const oldCost = parseFloat($('Change Request Data').item.json.old_value) || 0;\nconst newCost = parseFloat($('Change Request Data').item.json.new_value) || 0;\nconst bomData = $('Fetch BOM').item.json.data;\n\n// Count how many times PRT-101 appears in BOM\nconst targetPart = $('Change Request Data').item.json.part_number;\nconst lines = bomData.split('\\n');\nlet totalQty = 0;\n\nlines.forEach(line => {\n  if (line.includes(targetPart)) {\n    const cols = line.split(',');\n    const qty = parseInt(cols[4]) || 0;\n    totalQty += qty;\n  }\n});\n\nconst unitDelta = newCost - oldCost;\nconst annualVolume = totalQty * 52;\nconst annualImpact = unitDelta * annualVolume;\n\nreturn [{\n  json: {\n    old_unit_cost: oldCost.toFixed(2),\n    new_unit_cost: newCost.toFixed(2),\n    unit_cost_delta: unitDelta.toFixed(2),\n    total_qty_in_bom: totalQty,\n    annual_volume: annualVolume,\n    annual_cost_impact: annualImpact.toFixed(2),\n    impact_direction: annualImpact > 0 ? 'INCREASE' : 'DECREASE'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -48
+      ],
+      "id": "2f88873a-5b0a-4fbe-b768-87371a1cef47",
+      "name": "Cost Calculator"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a senior PLM Program Manager with 17 years of experience writing Engineering Change Orders for global manufacturing companies. Write professional, detailed, and actionable ECO documents ready for review board approval."
+            },
+            {
+              "content": "=Draft a complete formal Engineering Change Order (ECO) document.\n\n=== CHANGE REQUEST ===\nPart Number: {{ $('Change Request Data').item.json.part_number }}\nChange Type: {{ $('Change Request Data').item.json.change_type }}\nRequestor: {{ $('Change Request Data').item.json.requestor }}\nDescription: {{ $('Change Request Data').item.json.change_description }}\n\n=== BOM IMPACT ===\n{{ $('BOM Traversal Agent').item.json.message.content }}\n\n=== CLASSIFICATION ===\n{{ $('Impact Classifier').item.json.message.content }}\n\n=== COST IMPACT ===\nOld Unit Cost: ${{ $('Cost Calculator').item.json.old_unit_cost }}\nNew Unit Cost: ${{ $('Cost Calculator').item.json.new_unit_cost }}\nUnit Delta: ${{ $('Cost Calculator').item.json.unit_cost_delta }}\nTotal Qty in BOM: {{ $('Cost Calculator').item.json.total_qty_in_bom }}\nAnnual Cost Impact: ${{ $('Cost Calculator').item.json.annual_cost_impact }} {{ $('Cost Calculator').item.json.impact_direction }}\n\n=== WORK ORDERS AT RISK ===\n{{ $('Fetch Work Orders').item.json.data }}\n\nWrite the ECO with these 7 sections:\n1. CHANGE DESCRIPTION\n2. BUSINESS JUSTIFICATION\n3. BOM IMPACT SUMMARY\n4. AFFECTED WORK ORDERS\n5. COST ANALYSIS\n6. RECOMMENDED ACTIONS (with owner roles and target dates)\n7. RISK IF NOT IMPLEMENTED\n\nUse professional PLM language. Be specific and actionable."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        -48
+      ],
+      "id": "8d279326-c7e8-4fb2-a0c0-88015b47ed05",
+      "name": "ECO Report Generator",
+      "credentials": {
+        "openAiApi": {
+          "id": "ClsSPcufCWpJ2xbi",
+          "name": "OpenAI account 2"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Change Request Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Change Request Data": {
+      "main": [
+        [
+          {
+            "node": "Fetch BOM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch BOM": {
+      "main": [
+        [
+          {
+            "node": "Fetch Work Orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Work Orders": {
+      "main": [
+        [
+          {
+            "node": "BOM Traversal Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BOM Traversal Agent": {
+      "main": [
+        [
+          {
+            "node": "Impact Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Impact Classifier": {
+      "main": [
+        [
+          {
+            "node": "Cost Calculator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cost Calculator": {
+      "main": [
+        [
+          {
+            "node": "ECO Report Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "868ce9bb-9de3-4894-a59d-bcf3d07616c1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ba83ffc8434faf550308b3f265f435a960244c033950560a8e0a46980c853a49"
+  },
+  "nodeGroups": [],
+  "id": "vViMg3XKzJ5jQulN",
+  "tags": []
+}
